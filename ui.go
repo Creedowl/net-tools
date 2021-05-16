@@ -88,7 +88,9 @@ func ping(host string, repeat, timeout int, textView *tview.TextView) {
 		return
 	}
 	pinger.Ping()
+	m.Lock()
 	count--
+	m.Unlock()
 }
 
 func newPingPage() (string, tview.Primitive, bool, bool) {
