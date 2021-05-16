@@ -1,13 +1,13 @@
 package main
 
 import (
-	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
 	"math/rand"
 	"net"
+	"syscall"
 	"time"
 )
 
@@ -34,11 +34,15 @@ type Pinger struct {
 type reply struct {
 	TTL        uint8
 	Type       uint8
+	Code       uint8
 	Checksum   uint16
 	Identifier uint16
 	Sequence   uint16
+	Size       int
+	Ip         string
 }
 
+// NewPinger creates a new pinger instance
 func NewPinger(host string, repeat, timeout int, ch chan string) (*Pinger, error) {
 	ips, err := net.LookupIP(host)
 	if err != nil {
@@ -65,6 +69,7 @@ func NewPinger(host string, repeat, timeout int, ch chan string) (*Pinger, error
 	}, nil
 }
 
+// create a Ping ICMP datagram, return a function to generate datagram with increasing identifier
 func createMessage() (func() ([]byte, uint16), uint16) {
 	msg := [IcmpHeaderLength + PayloadLength]byte{
 		0x8, // type
@@ -117,25 +122,35 @@ func checksum(msg []byte) uint16 {
 	return uint16(^sum)
 }
 
-func parseResp(resp []byte) (*reply, error) {
-	if length := binary.LittleEndian.Uint16(resp[2:]); length != uint16(len(resp[IpHeaderLength:])) &&
-		length != IcmpHeaderLength+PayloadLength {
-		fmt.Println(length)
+// parse the ICMP response
+func parseResp(resp []byte, identifier uint16) (*reply, error) {
+	//fmt.Println(hex.EncodeToString(resp))
+	length := binary.LittleEndian.Uint16(resp[2:])
+	// mismatch datagram length
+	if length != uint16(len(resp[IpHeaderLength:])) {
 		return nil, errors.New("bad response")
+	}
+	id := binary.BigEndian.Uint16(resp[IpHeaderLength+4:])
+	sum := binary.BigEndian.Uint16(resp[IpHeaderLength+2:])
+	if id != identifier {
+		return nil, errors.New("identifier does not match")
+	}
+	if checksum(resp[IpHeaderLength:]) != sum {
+		return nil, errors.New("incorrect checksum")
 	}
 	r := reply{
 		TTL:        resp[8],
 		Type:       resp[IpHeaderLength],
-		Checksum:   binary.BigEndian.Uint16(resp[IpHeaderLength+2:]),
-		Identifier: binary.BigEndian.Uint16(resp[IpHeaderLength+4:]),
+		Code:       resp[IpHeaderLength+1],
+		Checksum:   sum,
+		Identifier: id,
 		Sequence:   binary.BigEndian.Uint16(resp[IpHeaderLength+6:]),
-	}
-	if checksum(resp[IpHeaderLength:]) != r.Checksum {
-		return nil, errors.New("incorrect checksum")
+		Size:       int(length),
 	}
 	return &r, nil
 }
 
+// count the results
 func statistic(times []float32) (avg, stddev float32) {
 	var sum float32 = 0
 	for _, v := range times {
@@ -150,48 +165,80 @@ func statistic(times []float32) (avg, stddev float32) {
 	return
 }
 
+// receive inbound datagram
+func (p *Pinger) listen(conn *Socket, identifier uint16, sequence chan int) chan *reply {
+	ch := make(chan *reply)
+	res := make([]byte, 128)
+	go func() {
+		seq := <-sequence
+		for {
+			size, from, err := conn.Read(res)
+			// read response timeout
+			if err != nil {
+				p.ch <- fmt.Sprintf("Request timeout for icmp_seq %d", seq)
+				ch <- nil
+				// read next response
+				s, ok := <-sequence
+				if !ok {
+					break
+				}
+				seq = s
+				continue
+			}
+			inet4 := from.(*syscall.SockaddrInet4)
+			r, err := parseResp(res[:size], identifier)
+			// mismatch ICMP response, sent from other processes
+			if err != nil {
+				continue
+			}
+			r.Ip = net.IP(inet4.Addr[:]).String()
+			ch <- r
+			// wait the next response
+			s, ok := <-sequence
+			if !ok {
+				break
+			}
+			seq = s
+		}
+	}()
+	return ch
+}
+
+// Ping starts pinging
 func (p *Pinger) Ping() {
 	// connect to host
-	conn, err := net.DialTimeout("ip4:icmp", p.Ip, time.Second*time.Duration(p.Timeout))
+	conn, err := NewSocket(net.ParseIP(p.Ip).To4(), time.Duration(p.Timeout)*time.Second)
 	if err != nil {
 		p.ch <- err.Error()
 		return
 	}
 	p.ch <- fmt.Sprintf("PING %s (%s): %d data bytes", p.Host, p.Ip, PayloadLength)
-	writer := bufio.NewWriter(conn)
 	msg, identifier := createMessage()
 	p.min = math.MaxFloat32
 	var times []float32
+
+	// send current sequence to listener
+	sequence := make(chan int)
+	// receive response
+	ch := p.listen(conn, identifier, sequence)
 	for i := 0; i < p.Repeat; i++ {
 		startTime := time.Now()
-		err = conn.SetDeadline(startTime.Add(time.Second * 5))
-		if err != nil {
-			p.ch <- err.Error()
-			continue
-		}
 		m, _ := msg()
-		_, err = writer.Write(m)
+		err = conn.Send(m)
 		if err != nil {
 			p.ch <- err.Error()
 			continue
 		}
-		_ = writer.Flush()
+		sequence <- i
 		p.transmitted++
-		res := make([]byte, IpHeaderLength+IcmpHeaderLength+PayloadLength)
-		_, err = conn.Read(res)
-		//fmt.Printf("time=%d\n", time.Since(startTime).Microseconds())
-		//p.ch <- fmt.Sprintf("time=%d\n", time.Since(startTime).Microseconds())
-		//p.ch <- hex.EncodeToString(res)
-		if err != nil {
-			p.ch <- err.Error()
+
+		// blocking until receive valid response or error
+		r := <-ch
+		if r == nil {
 			continue
 		}
 		p.received++
-		r, err := parseResp(res)
-		if err != nil {
-			p.ch <- err.Error()
-			continue
-		}
+
 		t := float32(time.Since(startTime).Microseconds()) / 1000.0
 		if t > p.max {
 			p.max = t
@@ -200,15 +247,18 @@ func (p *Pinger) Ping() {
 			p.min = t
 		}
 		times = append(times, t)
+
 		p.ch <- fmt.Sprintf("%d bytes from %s: icmp_seq=%d ttl=%d time=%.3f ms",
-			len(res)-IpHeaderLength,
-			conn.RemoteAddr(),
+			r.Size,
+			r.Ip,
 			r.Sequence,
 			r.TTL,
 			t,
 		)
 		time.Sleep(time.Second)
 	}
+	close(ch)
+	// show statistic result
 	p.ch <- fmt.Sprintf("--- %s ping statistic ---", p.Host)
 	p.ch <- fmt.Sprintf("identifier: %d", identifier)
 	p.ch <- fmt.Sprintf("%d packets transmitted, %d packets received, %.1f%% packet loss",
