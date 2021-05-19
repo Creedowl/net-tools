@@ -10,10 +10,11 @@ import (
 )
 
 var (
-	app   *tview.Application
-	pages *tview.Pages
-	count = 0
-	m     = sync.Mutex{}
+	app    *tview.Application
+	pages  *tview.Pages
+	count  = 0
+	m      = sync.Mutex{}
+	pinger *Pinger
 )
 
 var header = tview.NewFlex().
@@ -77,8 +78,11 @@ func ping(host string, repeat, timeout int, textView *tview.TextView) {
 			}
 			app.Draw()
 		}
+		m.Lock()
+		pinger = nil
+		m.Unlock()
 	}()
-	pinger, err := NewPinger(host, repeat, timeout, ch)
+	_pinger, err := NewPinger(host, repeat, timeout, ch)
 	if err != nil {
 		_, err := fmt.Fprintln(textView, err)
 		if err != nil {
@@ -87,10 +91,34 @@ func ping(host string, repeat, timeout int, textView *tview.TextView) {
 		}
 		return
 	}
+	m.Lock()
+	pinger = _pinger
+	m.Unlock()
 	pinger.Ping()
 	m.Lock()
 	count--
 	m.Unlock()
+}
+
+func pause() {
+	if pinger == nil {
+		return
+	}
+	pinger.Pause()
+}
+
+func resume() {
+	if pinger == nil {
+		return
+	}
+	pinger.Resume()
+}
+
+func cancel() {
+	if pinger == nil {
+		return
+	}
+	pinger.Cancel()
 }
 
 func newPingPage() (string, tview.Primitive, bool, bool) {
@@ -123,6 +151,15 @@ func newPingPage() (string, tview.Primitive, bool, bool) {
 		}).
 		AddButton("Ping", func() {
 			go ping(host, repeat, timeout, textview)
+		}).
+		AddButton("Pause", func() {
+			go pause()
+		}).
+		AddButton("Resume", func() {
+			go resume()
+		}).
+		AddButton("Cancel", func() {
+			go cancel()
 		})
 
 	container.AddItem(form, 0, 1, false).AddItem(textview, 0, 1, false)

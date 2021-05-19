@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -18,6 +19,7 @@ const (
 )
 
 type Pinger struct {
+	m           sync.Mutex
 	Host        string
 	Ip          string
 	Repeat      int
@@ -29,6 +31,8 @@ type Pinger struct {
 	avg         float32
 	max         float32
 	stddev      float32
+	pause       bool
+	cancel      bool
 }
 
 type reply struct {
@@ -61,11 +65,14 @@ func NewPinger(host string, repeat, timeout int, ch chan string) (*Pinger, error
 		return nil, errors.New("failed to resolve ipv4 host")
 	}
 	return &Pinger{
+		m:       sync.Mutex{},
 		Host:    host,
 		Ip:      ip,
 		Repeat:  repeat,
 		Timeout: timeout,
 		ch:      ch,
+		pause:   false,
+		cancel:  false,
 	}, nil
 }
 
@@ -216,12 +223,24 @@ func (p *Pinger) Ping() {
 	msg, identifier := createMessage()
 	p.min = math.MaxFloat32
 	var times []float32
+	seq := 0
 
 	// send current sequence to listener
 	sequence := make(chan int)
 	// receive response
 	ch := p.listen(conn, identifier, sequence)
-	for i := 0; i < p.Repeat; i++ {
+	for seq < p.Repeat {
+		p.m.Lock()
+		if p.pause {
+			p.m.Unlock()
+			continue
+		}
+		if p.cancel {
+			p.m.Unlock()
+			break
+		}
+		p.m.Unlock()
+		seq++
 		startTime := time.Now()
 		m, _ := msg()
 		err = conn.Send(m)
@@ -229,7 +248,7 @@ func (p *Pinger) Ping() {
 			p.ch <- err.Error()
 			continue
 		}
-		sequence <- i
+		sequence <- seq
 		p.transmitted++
 
 		// blocking until receive valid response or error
@@ -277,4 +296,32 @@ func (p *Pinger) Ping() {
 	}
 	close(p.ch)
 	return
+}
+
+func (p *Pinger) Pause() {
+	p.m.Lock()
+	defer p.m.Unlock()
+	if p.pause {
+		return
+	}
+	p.pause = true
+	p.ch <- "pause"
+}
+
+func (p *Pinger) Resume() {
+	p.m.Lock()
+	defer p.m.Unlock()
+	if !p.pause {
+		return
+	}
+	p.pause = false
+	p.ch <- "resume"
+}
+
+func (p *Pinger) Cancel() {
+	p.m.Lock()
+	defer p.m.Unlock()
+	p.pause = false
+	p.cancel = true
+	p.ch <- "cancel"
 }
