@@ -101,6 +101,8 @@ func ping(host string, repeat, timeout int, textView *tview.TextView) {
 }
 
 func pause() {
+	m.Lock()
+	defer m.Unlock()
 	if pinger == nil {
 		return
 	}
@@ -108,6 +110,8 @@ func pause() {
 }
 
 func resume() {
+	m.Lock()
+	defer m.Unlock()
 	if pinger == nil {
 		return
 	}
@@ -115,6 +119,8 @@ func resume() {
 }
 
 func cancel() {
+	m.Lock()
+	defer m.Unlock()
 	if pinger == nil {
 		return
 	}
@@ -165,13 +171,6 @@ func newPingPage() (string, tview.Primitive, bool, bool) {
 	container.AddItem(form, 0, 1, false).AddItem(textview, 0, 1, false)
 
 	flex.AddItem(container, 0, 1, false)
-	//go func() {
-	//	for i := 0; i < 500; i++ {
-	//		fmt.Fprintf(textview, "%s %d\n", "asdfasdfasdfasdf", i)
-	//		app.Draw()
-	//		time.Sleep(time.Millisecond * 100)
-	//	}
-	//}()
 	return "ping", flex, true, true
 }
 
