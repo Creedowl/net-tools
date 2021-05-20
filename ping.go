@@ -293,15 +293,17 @@ func (p *Pinger) Ping() bool {
 		p.transmitted,
 		p.received,
 		float32(p.transmitted-p.received)/float32(p.transmitted)*100,
-	)
-	if p.min != math.MaxFloat32 {
+	))
+
+	if p.received != 0 {
 		p.avg, p.stddev = statistic(times)
 		p.sendMsg(fmt.Sprintf("round-trip min/avg/max/stddev = %.3f/%.3f/%.3f/%.3f ms",
 			p.min,
 			p.avg,
 			p.max,
 			p.stddev,
-		)
+		))
+		result = true
 	}
 
 	return result
