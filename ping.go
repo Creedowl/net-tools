@@ -182,7 +182,7 @@ func (p *Pinger) listen(conn *Socket, identifier uint16, sequence chan int) chan
 			size, from, err := conn.Read(res)
 			// read response timeout
 			if err != nil {
-				p.ch <- fmt.Sprintf("Request timeout for icmp_seq %d", seq)
+				p.sendMsg(fmt.Sprintf("Request timeout for icmp_seq %d", seq))
 				ch <- nil
 				// read next response
 				s, ok := <-sequence
@@ -211,19 +211,28 @@ func (p *Pinger) listen(conn *Socket, identifier uint16, sequence chan int) chan
 	return ch
 }
 
+func (p *Pinger) sendMsg(msg string) {
+	if p.ch == nil {
+		return
+	}
+	p.ch <- msg
+}
+
 // Ping starts pinging
-func (p *Pinger) Ping() {
+func (p *Pinger) Ping() bool {
 	// connect to host
 	conn, err := NewSocket(net.ParseIP(p.Ip).To4(), time.Duration(p.Timeout)*time.Second)
 	if err != nil {
-		p.ch <- err.Error()
-		return
+		p.sendMsg(err.Error())
+		return false
 	}
-	p.ch <- fmt.Sprintf("PING %s (%s): %d data bytes", p.Host, p.Ip, PayloadLength)
+	p.sendMsg(fmt.Sprintf("PING %s (%s): %d data bytes", p.Host, p.Ip, PayloadLength))
 	msg, identifier := createMessage()
 	p.min = math.MaxFloat32
 	var times []float32
 	seq := 0
+
+	result := false
 
 	// send current sequence to listener
 	sequence := make(chan int)
@@ -245,7 +254,7 @@ func (p *Pinger) Ping() {
 		m, _ := msg()
 		err = conn.Send(m)
 		if err != nil {
-			p.ch <- err.Error()
+			p.sendMsg(err.Error())
 			continue
 		}
 		sequence <- seq
@@ -267,27 +276,27 @@ func (p *Pinger) Ping() {
 		}
 		times = append(times, t)
 
-		p.ch <- fmt.Sprintf("%d bytes from %s: icmp_seq=%d ttl=%d time=%.3f ms",
+		p.sendMsg(fmt.Sprintf("%d bytes from %s: icmp_seq=%d ttl=%d time=%.3f ms",
 			r.Size,
 			r.Ip,
 			r.Sequence,
 			r.TTL,
 			t,
-		)
+		))
 		time.Sleep(time.Second)
 	}
 	close(ch)
 	// show statistic result
-	p.ch <- fmt.Sprintf("--- %s ping statistic ---", p.Host)
-	p.ch <- fmt.Sprintf("identifier: %d", identifier)
-	p.ch <- fmt.Sprintf("%d packets transmitted, %d packets received, %.1f%% packet loss",
+	p.sendMsg(fmt.Sprintf("--- %s ping statistic ---", p.Host))
+	p.sendMsg(fmt.Sprintf("identifier: %d", identifier))
+	p.sendMsg(fmt.Sprintf("%d packets transmitted, %d packets received, %.1f%% packet loss",
 		p.transmitted,
 		p.received,
 		float32(p.transmitted-p.received)/float32(p.transmitted)*100,
 	)
 	if p.min != math.MaxFloat32 {
 		p.avg, p.stddev = statistic(times)
-		p.ch <- fmt.Sprintf("round-trip min/avg/max/stddev = %.3f/%.3f/%.3f/%.3f ms",
+		p.sendMsg(fmt.Sprintf("round-trip min/avg/max/stddev = %.3f/%.3f/%.3f/%.3f ms",
 			p.min,
 			p.avg,
 			p.max,
@@ -305,7 +314,7 @@ func (p *Pinger) Pause() {
 		return
 	}
 	p.pause = true
-	p.ch <- "pause"
+	p.sendMsg("pause")
 }
 
 func (p *Pinger) Resume() {
@@ -315,7 +324,7 @@ func (p *Pinger) Resume() {
 		return
 	}
 	p.pause = false
-	p.ch <- "resume"
+	p.sendMsg("resume")
 }
 
 func (p *Pinger) Cancel() {
@@ -323,5 +332,5 @@ func (p *Pinger) Cancel() {
 	defer p.m.Unlock()
 	p.pause = false
 	p.cancel = true
-	p.ch <- "cancel"
+	p.sendMsg("cancel")
 }
