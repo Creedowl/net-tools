@@ -294,10 +294,8 @@ func (p *Pinger) Ping() {
 			p.stddev,
 		)
 	}
-	p.m.Lock()
-	close(p.ch)
-	p.m.Unlock()
-	return
+
+	return result
 }
 
 func (p *Pinger) Pause() {

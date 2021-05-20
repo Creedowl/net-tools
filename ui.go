@@ -95,6 +95,7 @@ func ping(host string, repeat, timeout int, textView *tview.TextView) {
 	pinger = _pinger
 	m.Unlock()
 	pinger.Ping()
+	close(ch)
 	m.Lock()
 	count--
 	m.Unlock()
