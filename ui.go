@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"io"
 	"os"
 	"strconv"
 	"sync"
@@ -19,9 +20,15 @@ var (
 
 var header = tview.NewFlex().
 	AddItem(nil, 0, 1, false).
-	AddItem(tview.NewButton("Ping"), 0, 2, true).
+	AddItem(tview.NewButton("Ping").SetSelectedFunc(func() {
+		pages.SwitchToPage("ping")
+	}), 0, 2, true).
 	AddItem(nil, 0, 1, false).
 	AddItem(tview.NewButton("Traceroute"), 0, 2, false).
+	AddItem(nil, 0, 1, false).
+	AddItem(tview.NewButton("Scan").SetSelectedFunc(func() {
+		pages.SwitchToPage("scan")
+	}), 0, 2, false).
 	AddItem(nil, 0, 1, false)
 
 func Show() {
@@ -41,7 +48,7 @@ func Show() {
 	})
 
 	pages = tview.NewPages()
-	pages.AddPage(newPingPage()).AddPage(newQuitPage())
+	pages.AddPage(newPingPage()).AddPage(newQuitPage()).AddPage(newScanPage())
 
 	err := app.SetRoot(pages, true).Run()
 	if err != nil {
@@ -57,6 +64,26 @@ func checkNum(_ string, lastChar rune) bool {
 	return true
 }
 
+func fprintln(w io.Writer, a ...interface{}) {
+	_, err := fmt.Fprintln(w, a...)
+	if err != nil {
+		fmt.Println("failed to write text to text view")
+		os.Exit(1)
+	}
+}
+
+func output(textView *tview.TextView, ch chan string) {
+	go func() {
+		app.QueueUpdate(func() {
+			textView.Clear()
+		})
+		for s := range ch {
+			fprintln(textView, s)
+			app.Draw()
+		}
+	}()
+}
+
 func ping(host string, repeat, timeout int, textView *tview.TextView) {
 	m.Lock()
 	if count > 0 {
@@ -66,29 +93,11 @@ func ping(host string, repeat, timeout int, textView *tview.TextView) {
 	count++
 	m.Unlock()
 	ch := make(chan string, 10)
-	go func() {
-		app.QueueUpdate(func() {
-			textView.Clear()
-		})
-		for s := range ch {
-			_, err := fmt.Fprintln(textView, s)
-			if err != nil {
-				fmt.Println("failed to write text to text view")
-				os.Exit(1)
-			}
-			app.Draw()
-		}
-		m.Lock()
-		pinger = nil
-		m.Unlock()
-	}()
+	output(textView, ch)
+	ch <- host
 	_pinger, err := NewPinger(host, repeat, timeout, ch)
 	if err != nil {
-		_, err := fmt.Fprintln(textView, err)
-		if err != nil {
-			fmt.Println("failed to write text to text view")
-			os.Exit(1)
-		}
+		fprintln(textView, err)
 		return
 	}
 	m.Lock()
@@ -97,8 +106,26 @@ func ping(host string, repeat, timeout int, textView *tview.TextView) {
 	pinger.Ping()
 	close(ch)
 	m.Lock()
+	pinger = nil
 	count--
 	m.Unlock()
+}
+
+func scan(cidr string, textView *tview.TextView, resultView *tview.TextView) {
+	ch := make(chan string)
+	defer close(ch)
+	output(textView, ch)
+	scanner, err := NewScanner(cidr, ch)
+	if err != nil {
+		fprintln(textView, err)
+		return
+	}
+	result := scanner.Scan()
+	resultView.Clear()
+	for _, ip := range result {
+		fprintln(resultView, ip)
+	}
+	app.Draw()
 }
 
 func pause() {
@@ -186,4 +213,41 @@ func newQuitPage() (string, tview.Primitive, bool, bool) {
 			pages.SwitchToPage("ping")
 		})
 	return "quit", modal, true, false
+}
+
+func newScanPage() (string, tview.Primitive, bool, bool) {
+	cidr := "192.168.1.1/24"
+
+	flex := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(header, 3, 0, true)
+	flex.SetBorder(true).SetTitle("Scan the Subnet")
+
+	container := tview.NewFlex()
+	container.SetBorder(true).SetTitle("Scan")
+
+	textview := tview.NewTextView()
+	textview.SetBorder(true).SetTitle("log")
+	textview.ScrollToEnd()
+
+	resultView := tview.NewTextView()
+	resultView.SetBorder(true).SetTitle("Available subnets")
+	resultView.ScrollToEnd()
+
+	form := tview.NewForm()
+	form.
+		AddInputField("CIDR", cidr, 20, nil, func(text string) {
+			cidr = text
+		}).
+		AddButton("Scan", func() {
+			go scan(cidr, textview, resultView)
+		})
+
+	container.
+		AddItem(
+			tview.NewFlex().SetDirection(tview.FlexRow).
+				AddItem(form, 0, 1, true).
+				AddItem(textview, 0, 2, false), 0, 1, false).
+		AddItem(resultView, 0, 1, false)
+
+	flex.AddItem(container, 0, 1, false)
+	return "scan", flex, true, false
 }

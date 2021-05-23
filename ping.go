@@ -94,8 +94,6 @@ func createMessage() (func() ([]byte, uint16), uint16) {
 		0xef,
 	}
 
-	rand.Seed(time.Now().Unix())
-
 	// generate random identifier
 	identifier := uint16(rand.Uint32())
 	binary.BigEndian.PutUint16(msg[4:], identifier)
@@ -304,6 +302,12 @@ func (p *Pinger) Ping() bool {
 			p.stddev,
 		))
 		result = true
+	}
+
+	err = conn.Close()
+	if err != nil {
+		p.sendMsg(err.Error())
+		return false
 	}
 
 	return result
