@@ -24,7 +24,9 @@ var header = tview.NewFlex().
 		pages.SwitchToPage("ping")
 	}), 0, 2, true).
 	AddItem(nil, 0, 1, false).
-	AddItem(tview.NewButton("Traceroute"), 0, 2, false).
+	AddItem(tview.NewButton("Traceroute").SetSelectedFunc(func() {
+		pages.SwitchToPage("trace")
+	}), 0, 2, false).
 	AddItem(nil, 0, 1, false).
 	AddItem(tview.NewButton("Scan").SetSelectedFunc(func() {
 		pages.SwitchToPage("scan")
@@ -48,7 +50,7 @@ func Show() {
 	})
 
 	pages = tview.NewPages()
-	pages.AddPage(newPingPage()).AddPage(newQuitPage()).AddPage(newScanPage())
+	pages.AddPage(newPingPage()).AddPage(newQuitPage()).AddPage(newScanPage()).AddPage(newTracePage())
 
 	err := app.SetRoot(pages, true).Run()
 	if err != nil {
@@ -70,6 +72,7 @@ func fprintln(w io.Writer, a ...interface{}) {
 		fmt.Println("failed to write text to text view")
 		os.Exit(1)
 	}
+	app.Draw()
 }
 
 func output(textView *tview.TextView, ch chan string) {
@@ -98,13 +101,13 @@ func ping(host string, repeat, timeout int, textView *tview.TextView) {
 	_pinger, err := NewPinger(host, repeat, timeout, ch)
 	if err != nil {
 		fprintln(textView, err)
-		return
+	} else {
+		m.Lock()
+		pinger = _pinger
+		m.Unlock()
+		pinger.Ping()
+		close(ch)
 	}
-	m.Lock()
-	pinger = _pinger
-	m.Unlock()
-	pinger.Ping()
-	close(ch)
 	m.Lock()
 	pinger = nil
 	count--
@@ -126,6 +129,18 @@ func scan(cidr string, textView *tview.TextView, resultView *tview.TextView) {
 		fprintln(resultView, ip)
 	}
 	app.Draw()
+}
+
+func trace(host string, textView *tview.TextView) {
+	ch := make(chan string)
+	defer close(ch)
+	output(textView, ch)
+	tracer, err := NewTracer(host, ch)
+	if err != nil {
+		fprintln(textView, err)
+		return
+	}
+	tracer.Trace()
 }
 
 func pause() {
@@ -161,7 +176,7 @@ func newPingPage() (string, tview.Primitive, bool, bool) {
 	timeout := 5
 
 	flex := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(header, 3, 0, true)
-	flex.SetBorder(true).SetTitle("Ping & Traceroute")
+	flex.SetBorder(true).SetTitle("Net Tools")
 
 	container := tview.NewFlex()
 	container.SetBorder(true).SetTitle("Ping")
@@ -219,7 +234,7 @@ func newScanPage() (string, tview.Primitive, bool, bool) {
 	cidr := "192.168.1.1/24"
 
 	flex := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(header, 3, 0, true)
-	flex.SetBorder(true).SetTitle("Scan the Subnet")
+	flex.SetBorder(true).SetTitle("Net Tools")
 
 	container := tview.NewFlex()
 	container.SetBorder(true).SetTitle("Scan")
@@ -250,4 +265,33 @@ func newScanPage() (string, tview.Primitive, bool, bool) {
 
 	flex.AddItem(container, 0, 1, false)
 	return "scan", flex, true, false
+}
+
+func newTracePage() (string, tview.Primitive, bool, bool) {
+	host := "baidu.com"
+
+	flex := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(header, 3, 0, true)
+	flex.SetBorder(true).SetTitle("Net Tools")
+
+	container := tview.NewFlex()
+	container.SetBorder(true).SetTitle("Traceroute")
+
+	textview := tview.NewTextView()
+	textview.SetBorder(true).SetTitle("result")
+	textview.ScrollToEnd()
+
+	form := tview.NewForm()
+	form.
+		AddInputField("host", host, 0, nil, func(text string) {
+			host = text
+		}).
+		AddButton("Trace", func() {
+			go trace(host, textview)
+		})
+
+	container.AddItem(form, 0, 1, false).AddItem(textview, 0, 1, false)
+
+	flex.AddItem(container, 0, 1, false)
+
+	return "trace", flex, true, false
 }

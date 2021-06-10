@@ -59,6 +59,7 @@ func NewPinger(host string, repeat, timeout int, ch chan string) (*Pinger, error
 	for _, v := range ips {
 		if i := v.To4(); i != nil {
 			ip = i.String()
+			break
 		}
 	}
 	if ip == "" {

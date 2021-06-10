@@ -29,7 +29,7 @@ func main() {
 	rand.Seed(time.Now().Unix())
 	Show()
 	//ch := make(chan string)
-	//scanner, err := NewScanner("192.168.1.1/24", ch)
+	//tracer, err := NewTracer("114.114.114.114", ch)
 	//if err != nil {
 	//	fmt.Println(err)
 	//	return
@@ -39,6 +39,6 @@ func main() {
 	//		fmt.Println(s)
 	//	}
 	//}()
-	//res := scanner.Scan()
+	//tracer.Trace()
 	//fmt.Println(res)
 }

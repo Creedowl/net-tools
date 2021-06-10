@@ -50,3 +50,11 @@ func (s *Socket) Send(data []byte) error {
 func (s *Socket) Read(buf []byte) (int, syscall.Sockaddr, error) {
 	return syscall.Recvfrom(s.fd, buf, 0)
 }
+
+func (s *Socket) Bind() error {
+	return syscall.Bind(s.fd, s.addr)
+}
+
+func (s *Socket) SetTTL(ttl int) error {
+	return syscall.SetsockoptInt(s.fd, 0, syscall.IP_TTL, ttl)
+}
